@@ -1,0 +1,3 @@
+#-*- coding: utf8 -*-
+PROXY_SERVER_HOST = '127.0.0.1'
+PROXY_SERVER_PORT = 12001
