@@ -1,47 +1,17 @@
 #-*- coding: utf-8 -*-
 import sys
-import re
 import random
-import logging
 from gevent import monkey
 monkey.patch_all()
 import requests
 import gevent
 from bs4 import BeautifulSoup
 from gevent.server import StreamServer
+import fetchs
 import settings
 
 
-headers = {'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_9_3) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/36.0.1985.125'}
-
-
-class CheckerProxyFetch(object):
-    url = 'http://checkerproxy.net/all_proxy'
-
-    def __call__(self):
-        checkerproxy_list = []
-        try:
-            r = requests.get(self.url, headers=headers, timeout=60)
-            html = r.text
-        except Exception, e:
-            logging.error(e, exc_info=True)
-            return checkerproxy_list
-        else:
-            soup = BeautifulSoup(html)
-            for tr in soup.find_all('tr'):
-                if not tr or len(tr) != 19:
-                    continue
-                tds = tr.find_all('td')
-                proxy_ip = ""
-                if tds and len(tds) and tds[3] and tds[3].get_text().strip().lower() == 'http':
-                    ip = tds[1].get_text().rstrip().lstrip()
-                    proxy_status = tds[4].get_text()
-                    ip_port = re.match('(\d{1,3}\.){3}\d{1,3}:\d{1,5}', ip)
-                    if ip_port:
-                        proxy_ip = ip_port.group()
-                    if proxy_ip and 'Elite' in proxy_status:
-                        checkerproxy_list.append(proxy_ip)
-        return checkerproxy_list
+headers = settings.HEADERS
 
 
 class HttpProxy(object):
@@ -133,10 +103,9 @@ class HttpProxy(object):
             sys.exit('[-] Ctrl-C caught, exiting')
 
     def run(self):
-        if not self.fetchers:
-            self.regist_fetch(CheckerProxyFetch())
         for f in self.fetchers:
-            self.proxy_list.append(f())
+            if callable(f):
+                self.proxy_list.append(f())
         self.proxy_list = [ips for proxy_site in self.proxy_list for ips in proxy_site]
         self.proxy_list = list(set(self.proxy_list))
         self.proxy_checker()
@@ -144,7 +113,9 @@ class HttpProxy(object):
 
 def main():
     http_proxy = HttpProxy()
-    http_proxy.regist_fetch(CheckerProxyFetch())
+    get_proxy_fetchs = [_ for _ in dir(fetchs) if isinstance(getattr(fetchs, _), type) and _.lower().endswith('fetch')]
+    for fetch in get_proxy_fetchs:
+        http_proxy.regist_fetch(getattr(fetchs, fetch)())
     http_proxy.run()
 
     print 'external_ip:%s' % http_proxy.external_ip
@@ -155,10 +126,8 @@ def main():
         if client_request.startswith('get_proxy'):
             response = http_proxy.get_proxy()
         elif client_request.startswith('remove_proxy'):
-            print len(http_proxy.proxies)
             _, proxy = client_request.split("|")
             http_proxy.remove_proxy(proxy)
-            print len(http_proxy.proxies)
             response = 'OK'
         socket.send(response)
         socket.close()

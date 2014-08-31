@@ -4,9 +4,7 @@
 ------------
 服务端
 -----
-    可以实现自己的fetch 并且注册到http_proxy
-    例子:
-    http_proxy.regist_fetch(CheckerProxyFetch())
+    可以实现自己的fetch,在fetchs.py 里面写fetch class 会自动注册到 server中去抓去 参看CheckerProxyFetch
 
     runserver:
     python get_proxy_server.py
