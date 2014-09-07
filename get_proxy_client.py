@@ -20,7 +20,14 @@ class GetProxyClient(object):
         return response
 
     def get_proxy(self):
-        return self._request('get_proxy')
+        return self._request('get')
 
     def remove_proxy(self, proxy):
-        return self._request('remove_proxy|%s' % proxy)
+        return self._request('remove|%s' % proxy)
+
+
+if __name__ == '__main__':
+    client = GetProxyClient()
+    proxy = client.get_proxy()
+    print proxy
+    client.remove_proxy(proxy)
