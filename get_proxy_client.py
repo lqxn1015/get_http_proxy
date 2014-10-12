@@ -22,6 +22,12 @@ class GetProxyClient(object):
     def get_proxy(self):
         return self._request('get')
 
+    def count(self):
+        return self._request('count')
+
+    def reload(self):
+        return self._request('reload')
+
     def remove_proxy(self, proxy):
         return self._request('remove|%s' % proxy)
 
@@ -29,5 +35,6 @@ class GetProxyClient(object):
 if __name__ == '__main__':
     client = GetProxyClient()
     proxy = client.get_proxy()
-    print proxy
-    client.remove_proxy(proxy)
+    count = client.count()
+    print proxy,count
+    client.reload()

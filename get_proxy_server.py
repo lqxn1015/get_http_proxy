@@ -1,6 +1,8 @@
 #-*- coding: utf-8 -*-
 import sys
+import signal
 import random
+import threading
 from gevent import monkey
 monkey.patch_all()
 import requests
@@ -9,13 +11,71 @@ from bs4 import BeautifulSoup
 from gevent.server import StreamServer
 import fetchs
 import settings
+from log import logger
 
 headers = settings.HEADERS
 
 
+
 class HttpProxy(object):
 
-    def __init__(self, verify=None):
+    def __init__(self):
+        self.init_loader()
+
+    def init_loader(self):
+        loader = LoadProxiesHandler()
+        if getattr(self,'loader',None):
+            self.loader.join()
+            external_ip = self.loader.external_ip
+            if external_ip :
+                loader.external_ip = external_ip
+                loader.proxies = self.loader.proxies
+                loader.fetchers = self.loader.fetchers
+        self.loader = loader
+        self.loader.setDaemon(True)
+
+    def get_proxy(self):
+        if self.loader.proxies and self.count > 0 :
+            return random.choice(self.loader.proxies)
+        return ""
+
+    def count(self):
+        return len(self.loader.proxies)
+
+    def remove_proxy(self, proxy):
+        if proxy in self.loader.proxies:
+            self.loader.proxies.remove(proxy)
+
+    def load_proxies(self):
+        loader_is_alive = self.loader.isAlive()
+        logger.info("isAlive==>%s" % loader_is_alive)
+        if not loader_is_alive:
+            logger.info("started==>%s" % self.loader.started)
+            if self.loader.started:
+                self.init_loader()
+            self.loader.start()
+
+    def handle(self,socket,address):
+        client_request = socket.recv(50)
+        if client_request.startswith('get'):
+            response = self.get_proxy()
+            socket.send(response)
+        elif client_request.startswith('count'):
+            response = str(self.count())
+            socket.send(response)
+        elif client_request.startswith('remove'):
+            _, proxy = client_request.split("|")
+            self.remove_proxy(proxy)
+        elif client_request.startswith('reload'):
+            self.load_proxies()
+        socket.close()
+
+
+class LoadProxiesHandler(threading.Thread):
+
+    def __init__(self):
+        threading.Thread.__init__(self)
+        self.started = False
         self.external_ip = ""
         self.proxy_list = []
         self.fetchers = []
@@ -33,22 +93,23 @@ class HttpProxy(object):
             ip = soup.find("span", "greentext").get_text().strip()
         else:
             ip = resp.text
+        logger.info("external_ip==>%s" % ip)
         self.external_ip = ip
 
-    def regist_fetch(self, fetch):
-        self.fetchers.append(fetch)
+    def regist_fetchs(self):
+        get_proxy_fetchs = [_ for _ in dir(fetchs) if isinstance(getattr(fetchs, _), type) and _.lower().endswith('fetch')]
+        for fetch in get_proxy_fetchs:
+            self.fetchers.append(getattr(fetchs, fetch)())
 
-    def get_proxy(self):
-        if self.proxies:
-            return random.choice(self.proxies)
-        return ""
-
-    def remove_proxy(self, proxy):
-        if self.proxies and proxy in self.proxies:
-            self.proxies.remove(proxy)
+    def gen_proxy_list(self, fetch):
+        self.proxy_list.append(fetch())
 
     def verify_proxy(self, proxy):
         ''' Run 4 web tests on each proxy IP:port and collect the results '''
+        logger.info("proxy==>%s" % proxy)
+        proxy = proxy.strip()
+        if proxy in self.proxies:
+            return
         check_results = []
         urls = ['http://danmcinerney.org/ip.php',
                 'http://myip.dnsdynamic.org',
@@ -101,17 +162,16 @@ class HttpProxy(object):
         except KeyboardInterrupt:
             gevent.killall(jobs)
 
-    def gen_proxy_list(self, fetch):
-        self.proxy_list.append(fetch())
-
     def run(self):
-        get_proxy_fetchs = [_ for _ in dir(fetchs) if isinstance(getattr(fetchs, _), type) and _.lower().endswith('fetch')]
-        for fetch in get_proxy_fetchs:
-            self.regist_fetch(getattr(fetchs, fetch)())
+        logger.info("run")
 
+        if not self.fetchers:
+            self.regist_fetchs()
         jobs = [gevent.spawn(self.gen_proxy_list, f) for f in self.fetchers]
-        jobs.append(gevent.spawn(self.get_external_ip))
+        if not self.external_ip:
+            jobs.append(gevent.spawn(self.get_external_ip))
         try:
+            logger.info("get_ips")
             gevent.joinall(jobs)
         except KeyboardInterrupt:
             gevent.killall(jobs)
@@ -119,31 +179,23 @@ class HttpProxy(object):
         self.proxy_list = [ips for proxy_site in self.proxy_list for ips in proxy_site]
         self.proxy_list = list(set(self.proxy_list))
         self.proxy_checker()
+        self.started = True
 
-
-def server(http_proxy):
-    def handle(socket, address):
-        client_request = socket.recv(100)
-        if client_request.startswith('get'):
-            response = http_proxy.get_proxy()
-            socket.send(response)
-        elif client_request.startswith('remove'):
-            _, proxy = client_request.split("|")
-            http_proxy.remove_proxy(proxy)
-        socket.close()
-    print "external_ip:%s" % http_proxy.external_ip
-    print "proxies_count:%s" % len(http_proxy.proxies)
-    server = StreamServer((settings.PROXY_SERVER_HOST, settings.PROXY_SERVER_PORT), handle)
+def server():
+    http_proxy = HttpProxy()
+    http_proxy.load_proxies()
+    server = StreamServer((settings.PROXY_SERVER_HOST, settings.PROXY_SERVER_PORT), http_proxy.handle)
     server.serve_forever()
 
 
 def main():
-    try:
-        http_proxy = HttpProxy()
-        http_proxy.run()
-        server(http_proxy)
-    except KeyboardInterrupt:
-        sys.exit('[-] Ctrl-C caught, exiting')
+    def handler_exit(signum, frame):
+        sys.exit()
+
+    signal.signal(signal.SIGINT, handler_exit)
+    signal.signal(signal.SIGTERM, handler_exit)
+
+    server()
 
 if __name__ == '__main__':
     main()
