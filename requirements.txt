@@ -1,0 +1,4 @@
+pycurl==7.19.5.1
+tornado==4.0.2
+redis==2.10.3
+bs4
